@@ -4,7 +4,7 @@ from typing import Any, Dict, List, Tuple, Type, TypeVar, Union
 from graphql import Undefined
 from sqlalchemy import and_, not_, or_
 from sqlalchemy.orm import Query, aliased  # , selectinload
-
+from graphene.types.utils import yank_fields_from_attrs
 import graphene
 from graphene.types.inputobjecttype import (
     InputObjectTypeContainer,
@@ -63,10 +63,14 @@ def _get_functions_by_regex(
     return matching_functions
 
 
+class GrapheneSQLAlchemyFilter(graphene.InputObjectType):
+    pass
+
+
 class BaseTypeFilter(graphene.InputObjectType):
     @classmethod
     def __init_subclass_with_meta__(
-        cls, filter_fields=None, model=None, _meta=None, **options
+        cls, filter_fields=None, model=None, _meta=None, custom_filter_class=None, **options
     ):
         from graphene_sqlalchemy.converter import convert_sqlalchemy_type
 
@@ -75,8 +79,17 @@ class BaseTypeFilter(graphene.InputObjectType):
             _meta = InputObjectTypeOptions(cls)
 
         logic_functions = _get_functions_by_regex(".+_logic$", "_logic$", cls)
-
-        new_filter_fields = {}
+        custom_filter_fields = {}
+        if custom_filter_class and issubclass(custom_filter_class, GrapheneSQLAlchemyFilter):
+            custom_filter_fields = yank_fields_from_attrs(custom_filter_class.__dict__, _as=graphene.InputField)
+            functions = dict(_get_functions_by_regex(".+_filter$", "_filter$", custom_filter_class))
+            for field_name in custom_filter_fields.keys():
+                assert functions.get(field_name), f"Custom filter field {field_name} must have a corresponding filter method"
+                annotations = functions.get(field_name)
+                assert annotations.get('info'), "Each custom filter method must have an info field with valid type annotations"
+                assert annotations.get('query'), "Each custom filter method must have a query field with valid type annotations"
+                assert annotations.get('value'), "Each custom filter method must have a value field with valid type annotations"
+        new_filter_fields = custom_filter_fields
         # Generate Graphene Fields from the filter functions based on type hints
         for field_name, _annotations in logic_functions:
             assert (
@@ -98,6 +111,7 @@ class BaseTypeFilter(graphene.InputObjectType):
         _meta.fields.update(new_filter_fields)
 
         _meta.model = model
+        _meta.filter_class = custom_filter_class
 
         super(BaseTypeFilter, cls).__init_subclass_with_meta__(_meta=_meta, **options)
 
@@ -152,7 +166,7 @@ class BaseTypeFilter(graphene.InputObjectType):
 
     @classmethod
     def execute_filters(
-        cls, query, filter_dict: Dict[str, Any], model_alias=None
+        cls, query, filter_dict: Dict[str, Any], model_alias=None, info=None
     ) -> Tuple[Query, List[Any]]:
         model = cls._meta.model
         if model_alias:
@@ -183,40 +197,51 @@ class BaseTypeFilter(graphene.InputObjectType):
                     query, field_filter_type.of_type, field_filters, model_alias=model
                 )
                 clauses.extend(_clauses)
+
             else:
-                # Get the model attr from the inputfield in case the field is aliased in graphql
-                model_field = getattr(model, input_field.model_attr or field)
-                if issubclass(field_filter_type, BaseTypeFilter):
-                    # Get the model to join on the Filter Query
-                    joined_model = field_filter_type._meta.model
-                    # Always alias the model
-                    joined_model_alias = aliased(joined_model)
-                    # Join the aliased model onto the query
-                    query = query.join(model_field.of_type(joined_model_alias))
-                    # Pass the joined query down to the next object type filter for processing
-                    query, _clauses = field_filter_type.execute_filters(
-                        query, field_filters, model_alias=joined_model_alias
-                    )
-                    clauses.extend(_clauses)
-                if issubclass(field_filter_type, RelationshipFilter):
-                    # TODO see above; not yet working
-                    relationship_prop = field_filter_type._meta.model
-                    # Always alias the model
-                    # joined_model_alias = aliased(relationship_prop)
+                # Allow custom filter class to be used for custom filtering over 
+                if not hasattr(input_field, "model_attr") and cls._meta.filter_class:
+                    clause = getattr(cls._meta.filter_class, field + "_filter")(info, query, field_filters)
+                    if isinstance(clause, tuple):
+                        query, clause = clause
+                    elif isinstance(clause, Query):
+                        query = clause
+                        continue
+                    clauses.append(clause)
+                else:
+                    model_field = getattr(model, input_field.model_attr or field)
+                    #     return query, clauses
+                    if issubclass(field_filter_type, BaseTypeFilter):
+                        # Get the model to join on the Filter Query
+                        joined_model = field_filter_type._meta.model
+                        # Always alias the model
+                        joined_model_alias = aliased(joined_model)
+                        # Join the aliased model onto the query
+                        query = query.join(model_field.of_type(joined_model_alias))
+                        # Pass the joined query down to the next object type filter for processing
+                        query, _clauses = field_filter_type.execute_filters(
+                            query, field_filters, model_alias=joined_model_alias
+                        )
+                        clauses.extend(_clauses)
+                    if issubclass(field_filter_type, RelationshipFilter):
+                        # TODO see above; not yet working
+                        relationship_prop = field_filter_type._meta.model
+                        # Always alias the model
+                        # joined_model_alias = aliased(relationship_prop)
 
-                    # Join the aliased model onto the query
-                    # query = query.join(model_field.of_type(joined_model_alias))
-                    # todo should we use selectinload here instead of join for large lists?
+                        # Join the aliased model onto the query
+                        # query = query.join(model_field.of_type(joined_model_alias))
+                        # todo should we use selectinload here instead of join for large lists?
 
-                    query, _clauses = field_filter_type.execute_filters(
-                        query, model, model_field, field_filters, relationship_prop
-                    )
-                    clauses.extend(_clauses)
-                elif issubclass(field_filter_type, FieldFilter):
-                    query, _clauses = field_filter_type.execute_filters(
-                        query, model_field, field_filters
-                    )
-                    clauses.extend(_clauses)
+                        query, _clauses = field_filter_type.execute_filters(
+                            query, model, model_field, field_filters, relationship_prop
+                        )
+                        clauses.extend(_clauses)
+                    elif issubclass(field_filter_type, FieldFilter):
+                        query, _clauses = field_filter_type.execute_filters(
+                            query, model_field, field_filters
+                        )
+                        clauses.extend(_clauses)
 
         return query, clauses
 
