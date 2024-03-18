@@ -440,7 +440,6 @@ class SQLAlchemyBase(BaseType):
         batching=False,
         connection_field_factory=None,
         _meta=None,
-        filter=None,
         **options,
     ):
         # We always want to bypass this hook unless we're defining a concrete
@@ -484,6 +483,7 @@ class SQLAlchemyBase(BaseType):
             _as=Field,
             sort=False,
         )
+
         if use_connection is None and interfaces:
             use_connection = any(
                 issubclass(interface, Node) for interface in interfaces
@@ -518,8 +518,9 @@ class SQLAlchemyBase(BaseType):
             #  to the scalar filters here (to generate expressions from the model)
 
             filter_fields = yank_fields_from_attrs(filters, _as=InputField, sort=False)
+
             _meta.filter_class = BaseTypeFilter.create_type(
-                f"{cls.__name__}Filter", filter_fields=filter_fields, model=model, custom_filter_class=filter
+                f"{cls.__name__}Filter", filter_fields=filter_fields, model=model
             )
             registry.register_filter_for_base_type(cls, _meta.filter_class)
 
@@ -599,7 +600,6 @@ class SQLAlchemyObjectTypeOptions(ObjectTypeOptions):
     connection = None  # type: sqlalchemy.Type[sqlalchemy.Connection]
     id = None  # type: str
     filter_class: Type[BaseTypeFilter] = None
-    filter = None
 
 
 class SQLAlchemyObjectType(SQLAlchemyBase, ObjectType):

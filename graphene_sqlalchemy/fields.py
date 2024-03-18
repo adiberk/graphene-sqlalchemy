@@ -104,7 +104,7 @@ class SQLAlchemyConnectionField(ConnectionField):
         if filter is not None:
             assert isinstance(filter, dict)
             filter_type: BaseTypeFilter = type(filter)
-            query, clauses = filter_type.execute_filters(query, filter, info)
+            query, clauses = filter_type.execute_filters(query, filter)
             query = query.filter(*clauses)
         return query
 
