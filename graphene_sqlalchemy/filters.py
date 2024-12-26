@@ -1,15 +1,16 @@
 import re
 from typing import Any, Dict, List, Tuple, Type, TypeVar, Union
 
-from graphql import Undefined
-from sqlalchemy import and_, not_, or_
-from sqlalchemy.orm import Query, aliased  # , selectinload
-from graphene.types.utils import yank_fields_from_attrs
 import graphene
 from graphene.types.inputobjecttype import (
     InputObjectTypeContainer,
     InputObjectTypeOptions,
 )
+from graphene.types.utils import yank_fields_from_attrs
+from graphql import Undefined
+from sqlalchemy import and_, not_, or_
+from sqlalchemy.orm import Query, aliased  # , selectinload
+
 from graphene_sqlalchemy.utils import is_list
 
 BaseTypeFilterSelf = TypeVar(
@@ -70,7 +71,12 @@ class GrapheneSQLAlchemyFilter(graphene.InputObjectType):
 class BaseTypeFilter(graphene.InputObjectType):
     @classmethod
     def __init_subclass_with_meta__(
-        cls, filter_fields=None, model=None, _meta=None, custom_filter_class=None, **options
+        cls,
+        filter_fields=None,
+        model=None,
+        _meta=None,
+        custom_filter_class=None,
+        **options,
     ):
         from graphene_sqlalchemy.converter import convert_sqlalchemy_type
 
@@ -80,15 +86,29 @@ class BaseTypeFilter(graphene.InputObjectType):
 
         logic_functions = _get_functions_by_regex(".+_logic$", "_logic$", cls)
         custom_filter_fields = {}
-        if custom_filter_class and issubclass(custom_filter_class, GrapheneSQLAlchemyFilter):
-            custom_filter_fields = yank_fields_from_attrs(custom_filter_class.__dict__, _as=graphene.InputField)
-            functions = dict(_get_functions_by_regex(".+_filter$", "_filter$", custom_filter_class))
+        if custom_filter_class and issubclass(
+            custom_filter_class, GrapheneSQLAlchemyFilter
+        ):
+            custom_filter_fields = yank_fields_from_attrs(
+                custom_filter_class.__dict__, _as=graphene.InputField
+            )
+            functions = dict(
+                _get_functions_by_regex(".+_filter$", "_filter$", custom_filter_class)
+            )
             for field_name in custom_filter_fields.keys():
-                assert functions.get(field_name), f"Custom filter field {field_name} must have a corresponding filter method"
+                assert functions.get(
+                    field_name
+                ), f"Custom filter field {field_name} must have a corresponding filter method"
                 annotations = functions.get(field_name)
-                assert annotations.get('info'), "Each custom filter method must have an info field with valid type annotations"
-                assert annotations.get('query'), "Each custom filter method must have a query field with valid type annotations"
-                assert annotations.get('value'), "Each custom filter method must have a value field with valid type annotations"
+                assert annotations.get(
+                    "info"
+                ), "Each custom filter method must have an info field with valid type annotations"
+                assert annotations.get(
+                    "query"
+                ), "Each custom filter method must have a query field with valid type annotations"
+                assert annotations.get(
+                    "value"
+                ), "Each custom filter method must have a value field with valid type annotations"
         new_filter_fields = custom_filter_fields
         # Generate Graphene Fields from the filter functions based on type hints
         for field_name, _annotations in logic_functions:
@@ -121,6 +141,7 @@ class BaseTypeFilter(graphene.InputObjectType):
         query,
         filter_type: "BaseTypeFilter",
         val: List[BaseTypeFilterSelf],
+        info: graphene.ResolveInfo,
         model_alias=None,
     ):
         # # Get the model to join on the Filter Query
@@ -133,7 +154,7 @@ class BaseTypeFilter(graphene.InputObjectType):
             # query = query.join(model_field.of_type(joined_model_alias))
 
             query, _clauses = filter_type.execute_filters(
-                query, value, model_alias=model_alias
+                query, value, info, model_alias=model_alias
             )  # , model_alias=joined_model_alias)
             clauses += _clauses
 
@@ -145,6 +166,7 @@ class BaseTypeFilter(graphene.InputObjectType):
         query,
         filter_type: "BaseTypeFilter",
         val: List[BaseTypeFilterSelf],
+        info: graphene.ResolveInfo,
         model_alias=None,
     ):
         # # Get the model to join on the Filter Query
@@ -158,7 +180,7 @@ class BaseTypeFilter(graphene.InputObjectType):
             # query = query.join(model_field.of_type(joined_model_alias))
 
             query, _clauses = filter_type.execute_filters(
-                query, value, model_alias=model_alias
+                query, value, info, model_alias=model_alias
             )  # , model_alias=joined_model_alias)
             clauses += _clauses
 
@@ -166,7 +188,11 @@ class BaseTypeFilter(graphene.InputObjectType):
 
     @classmethod
     def execute_filters(
-        cls, query, filter_dict: Dict[str, Any], model_alias=None, info=None
+        cls,
+        query,
+        filter_dict: Dict[str, Any],
+        info: graphene.ResolveInfo,
+        model_alias=None,
     ) -> Tuple[Query, List[Any]]:
         model = cls._meta.model
         if model_alias:
@@ -189,19 +215,29 @@ class BaseTypeFilter(graphene.InputObjectType):
             #  to conduct joins and alias the joins (in case there are duplicate joins: A->B A->C B->C)
             if field == "and":
                 query, _clauses = cls.and_logic(
-                    query, field_filter_type.of_type, field_filters, model_alias=model
+                    query,
+                    field_filter_type.of_type,
+                    field_filters,
+                    info,
+                    model_alias=model,
                 )
                 clauses.extend(_clauses)
             elif field == "or":
                 query, _clauses = cls.or_logic(
-                    query, field_filter_type.of_type, field_filters, model_alias=model
+                    query,
+                    field_filter_type.of_type,
+                    field_filters,
+                    info,
+                    model_alias=model,
                 )
                 clauses.extend(_clauses)
 
             else:
-                # Allow custom filter class to be used for custom filtering over 
+                # Allow custom filter class to be used for custom filtering over
                 if not hasattr(input_field, "model_attr") and cls._meta.filter_class:
-                    clause = getattr(cls._meta.filter_class, field + "_filter")(info, query, field_filters)
+                    clause = getattr(cls._meta.filter_class, field + "_filter")(
+                        info, query, field_filters
+                    )
                     if isinstance(clause, tuple):
                         query, clause = clause
                     elif isinstance(clause, Query):
@@ -220,7 +256,7 @@ class BaseTypeFilter(graphene.InputObjectType):
                         query = query.join(model_field.of_type(joined_model_alias))
                         # Pass the joined query down to the next object type filter for processing
                         query, _clauses = field_filter_type.execute_filters(
-                            query, field_filters, model_alias=joined_model_alias
+                            query, field_filters, info, model_alias=joined_model_alias
                         )
                         clauses.extend(_clauses)
                     if issubclass(field_filter_type, RelationshipFilter):
