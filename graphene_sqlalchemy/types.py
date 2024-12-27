@@ -6,13 +6,8 @@ from functools import partial
 from inspect import isawaitable
 from typing import Any, Optional, Type, Union
 
-import sqlalchemy
-from sqlalchemy.ext.associationproxy import AssociationProxy
-from sqlalchemy.ext.hybrid import hybrid_property
-from sqlalchemy.orm import ColumnProperty, CompositeProperty, RelationshipProperty
-from sqlalchemy.orm.exc import NoResultFound
-
 import graphene
+import sqlalchemy
 from graphene import Dynamic, Field, InputField
 from graphene.relay import Connection, Node
 from graphene.types.base import BaseType
@@ -21,6 +16,10 @@ from graphene.types.objecttype import ObjectType, ObjectTypeOptions
 from graphene.types.unmountedtype import UnmountedType
 from graphene.types.utils import yank_fields_from_attrs
 from graphene.utils.orderedtype import OrderedType
+from sqlalchemy.ext.associationproxy import AssociationProxy
+from sqlalchemy.ext.hybrid import hybrid_property
+from sqlalchemy.orm import ColumnProperty, CompositeProperty, RelationshipProperty
+from sqlalchemy.orm.exc import NoResultFound
 
 from .converter import (
     convert_sqlalchemy_association_proxy,
@@ -440,6 +439,7 @@ class SQLAlchemyBase(BaseType):
         batching=False,
         connection_field_factory=None,
         _meta=None,
+        filter=None,
         create_filters=True,
         **options,
     ):
@@ -484,7 +484,6 @@ class SQLAlchemyBase(BaseType):
             _as=Field,
             sort=False,
         )
-
         if use_connection is None and interfaces:
             use_connection = any(
                 issubclass(interface, Node) for interface in interfaces
@@ -519,9 +518,11 @@ class SQLAlchemyBase(BaseType):
             #  to the scalar filters here (to generate expressions from the model)
 
             filter_fields = yank_fields_from_attrs(filters, _as=InputField, sort=False)
-
             _meta.filter_class = BaseTypeFilter.create_type(
-                f"{cls.__name__}Filter", filter_fields=filter_fields, model=model
+                f"{cls.__name__}Filter",
+                filter_fields=filter_fields,
+                model=model,
+                custom_filter_class=filter,
             )
             registry.register_filter_for_base_type(cls, _meta.filter_class)
 
@@ -601,6 +602,7 @@ class SQLAlchemyObjectTypeOptions(ObjectTypeOptions):
     connection = None  # type: sqlalchemy.Type[sqlalchemy.Connection]
     id = None  # type: str
     filter_class: Type[BaseTypeFilter] = None
+    filter = None
 
 
 class SQLAlchemyObjectType(SQLAlchemyBase, ObjectType):
